@@ -1,0 +1,10 @@
+django==4.2.7
+mongoengine==0.27.0
+pymongo==3.12.3
+twilio==8.10.0
+openai==1.12.0
+python-dotenv==1.0.0
+colorama==0.4.6
+tabulate==0.9.0
+sentence-transformers==2.4.0
+numpy==1.26.4
