@@ -32,6 +32,10 @@ from django.conf import settings
 # ---------------------------------------------------------------------------
 # Module-level singleton — set ONCE by init_kb(), never recreated per request.
 # ---------------------------------------------------------------------------
+_encoder = None
+_chroma_client = None
+_collection = None
+_kb_initialized = False  # prints "[KB] ChromaDB loaded" exactly once per process
 _KB: Optional["KnowledgeBase"] = None
 
 
@@ -64,6 +68,13 @@ class KnowledgeBase:
             metadata={"hnsw:space": "cosine"},
         )
 
+def _chunk_text(text: str, size: int = 500, overlap: int = 50) -> List[str]:
+    """Split *text* into overlapping character-level chunks."""
+    chunks, i = [], 0
+    while i < len(text):
+        chunks.append(text[i : i + size])
+        i += size - overlap
+    return chunks
         count = self._collection.count()
         if count == 0:
             raise RuntimeError(
@@ -225,6 +236,19 @@ def get_kb() -> "KnowledgeBase":
     return _KB
 
 
+    for fpath in files:
+        fname = Path(fpath).name
+        source = Path(fpath).stem
+        print(f"[KB] Loading: {fname}")
+        text = open(fpath, encoding="utf-8", errors="ignore").read()
+        raw_chunks = [c for c in _chunk_text(text) if c.strip()]
+        if not raw_chunks:
+            continue
+
+        print(f"[KB] Created {len(raw_chunks)} chunks from {fname}")
+
+        # Encode all chunks for this file in one batched call.
+        embs = enc.encode(raw_chunks, show_progress_bar=False, batch_size=32)
 # ---------------------------------------------------------------------------
 # Module-level convenience wrappers
 # Keeps calls/views.py imports identical: retrieve(), build_system_prompt()
@@ -244,6 +268,7 @@ def build_system_prompt(chunks: List[Tuple[str, str, float]]) -> str:
 # Index builder — called ONLY by scripts/index_kb.py, NEVER per request
 # ---------------------------------------------------------------------------
 
+    print(f"[KB] Indexed {len(ids)} total chunks into ChromaDB at {settings.CHROMA_DB_DIR}")
 CHUNK_SIZE    = 500   # words per chunk
 CHUNK_OVERLAP = 50    # word overlap between consecutive chunks
 UPSERT_BATCH  = 100   # ChromaDB upsert batch size
@@ -263,6 +288,7 @@ def build_index(force: bool = False) -> dict:
     """
     Read docs → chunk → embed → upsert into ChromaDB.
 
+    Raises RuntimeError if ChromaDB is empty — run scripts/index_kb.py first.
     Parameters
     ----------
     force : bool
@@ -275,6 +301,19 @@ def build_index(force: bool = False) -> dict:
     Called exclusively by ``scripts/index_kb.py``.  Never called at
     request-time — that is the core fix for the per-request re-indexing bug.
     """
+    global _kb_initialized
+    collection = _get_collection()
+
+    count = collection.count()
+    if count == 0:
+        raise RuntimeError(
+            "[KB] ChromaDB is empty or missing. "
+            "Run: python scripts/index_kb.py"
+        )
+
+    if not _kb_initialized:
+        print(f"[KB] ChromaDB loaded. {count} chunks ready. Skipping rebuild.")
+        _kb_initialized = True
     import chromadb
     from sentence_transformers import SentenceTransformer
 
