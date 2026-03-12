@@ -18,6 +18,7 @@ python scripts/index_kb.py --force
 
 import sys
 import os
+import glob
 import argparse
 import time
 
@@ -65,9 +66,14 @@ def main() -> None:
     elapsed = time.perf_counter() - t0
 
     collection = _get_collection()
+    kb_dir = settings.KNOWLEDGE_BASE_DIR
+    files = (
+        glob.glob(os.path.join(kb_dir, "**/*.txt"), recursive=True)
+        + glob.glob(os.path.join(kb_dir, "**/*.md"), recursive=True)
+    )
     print(
-        f"[index_kb] Done. {collection.count()} chunks in ChromaDB "
-        f"(took {elapsed:.2f}s)."
+        f"Index built successfully. {collection.count()} chunks from {len(files)} files. "
+        f"(took {elapsed:.2f}s)"
     )
 
 

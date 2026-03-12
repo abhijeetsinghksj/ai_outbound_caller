@@ -13,6 +13,7 @@ from django.conf import settings
 _encoder = None
 _chroma_client = None
 _collection = None
+_kb_initialized = False  # prints "[KB] ChromaDB loaded" exactly once per process
 
 
 # ---------------------------------------------------------------------------
@@ -52,12 +53,11 @@ def _get_collection():
     return _collection
 
 
-def _chunk_text(text: str, size: int = 400, overlap: int = 50) -> List[str]:
-    """Split *text* into overlapping word-level chunks."""
-    words = text.split()
+def _chunk_text(text: str, size: int = 500, overlap: int = 50) -> List[str]:
+    """Split *text* into overlapping character-level chunks."""
     chunks, i = [], 0
-    while i < len(words):
-        chunks.append(" ".join(words[i : i + size]))
+    while i < len(text):
+        chunks.append(text[i : i + size])
         i += size - overlap
     return chunks
 
@@ -116,11 +116,15 @@ def build_index(force: bool = False) -> None:
     metadatas: List[dict] = []
 
     for fpath in files:
+        fname = Path(fpath).name
         source = Path(fpath).stem
+        print(f"[KB] Loading: {fname}")
         text = open(fpath, encoding="utf-8", errors="ignore").read()
         raw_chunks = [c for c in _chunk_text(text) if c.strip()]
         if not raw_chunks:
             continue
+
+        print(f"[KB] Created {len(raw_chunks)} chunks from {fname}")
 
         # Encode all chunks for this file in one batched call.
         embs = enc.encode(raw_chunks, show_progress_bar=False, batch_size=32)
@@ -146,14 +150,14 @@ def build_index(force: bool = False) -> None:
             metadatas=metadatas[start:end],
         )
 
-    print(f"[KB] Indexed {len(ids)} chunks from {len(files)} file(s) into ChromaDB.")
+    print(f"[KB] Indexed {len(ids)} total chunks into ChromaDB at {settings.CHROMA_DB_DIR}")
 
 
 def retrieve(query: str, top_k: int = 3) -> List[Tuple[str, str, float]]:
     """
     Embed *query* and return the top-*k* most relevant KB chunks.
 
-    Triggers a one-time index build on first call if ChromaDB is empty.
+    Raises RuntimeError if ChromaDB is empty — run scripts/index_kb.py first.
 
     Returns
     -------
@@ -161,14 +165,19 @@ def retrieve(query: str, top_k: int = 3) -> List[Tuple[str, str, float]]:
     similarity.  Signature is backward-compatible with the previous
     in-memory implementation so callers (views.py) need no changes.
     """
+    global _kb_initialized
     collection = _get_collection()
 
-    # Auto-build on first request (covers cold-start after deploy).
-    if collection.count() == 0:
-        build_index()
+    count = collection.count()
+    if count == 0:
+        raise RuntimeError(
+            "[KB] ChromaDB is empty or missing. "
+            "Run: python scripts/index_kb.py"
+        )
 
-    if collection.count() == 0:
-        return []
+    if not _kb_initialized:
+        print(f"[KB] ChromaDB loaded. {count} chunks ready. Skipping rebuild.")
+        _kb_initialized = True
 
     enc = _get_encoder()
     q_emb = enc.encode([query], show_progress_bar=False)[0].tolist()
