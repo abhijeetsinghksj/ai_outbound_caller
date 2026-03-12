@@ -4,6 +4,9 @@ from django.http import HttpResponse
 from calls.models import CallSession, TurnMetrics
 from calls.twilio_service import twiml_gather, twiml_hangup
 from calls.ai_service import generate_response
+# retrieve() and build_system_prompt() delegate to the ChromaDB singleton
+# initialised once at startup via KnowledgeBaseConfig.ready() — no per-request
+# indexing or file I/O occurs here.
 from knowledge_base.kb_service import retrieve, build_system_prompt
 from evaluation.eval_service import score_response
 
