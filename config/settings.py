@@ -12,7 +12,7 @@ ALLOWED_HOSTS = ["*"]
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
-    "calls",
+    "calls.apps.CallsConfig",
     "knowledge_base",
     "evaluation",
 ]
