@@ -61,6 +61,7 @@ MODEL_CONFIGS = {
 }
 
 KNOWLEDGE_BASE_DIR = os.getenv("KNOWLEDGE_BASE_DIR", str(BASE_DIR / "knowledge_base" / "docs"))
+CHROMA_DB_DIR      = os.getenv("CHROMA_DB_DIR",      str(BASE_DIR / "knowledge_base" / "chroma_db"))
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
