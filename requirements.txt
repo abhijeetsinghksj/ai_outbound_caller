@@ -8,6 +8,10 @@ colorama==0.4.6
 tabulate==0.9.0
 groq>=0.4.0
 
+# Async task queue + Redis session cache
+celery[redis]>=5.3.0
+redis>=5.0.0
+
 # Vector knowledge base
 chromadb>=0.4.0
 sentence-transformers>=2.4.0
