@@ -28,3 +28,6 @@ knowledge_base/chroma_db/
 
 # Sentence-transformers model cache
 .cache/
+
+# Log files — generated at runtime, not source
+logs/*.log

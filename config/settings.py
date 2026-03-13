@@ -68,3 +68,59 @@ TIME_ZONE = "UTC"
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# ── Logging ────────────────────────────────────────────────────────────────
+LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{asctime} {levelname} {name} {message}",
+            "style": "{",
+        },
+        "latency": {
+            # Compact one-liner used by the [LATENCY] logger
+            "format": "{asctime} [LATENCY] {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(LOGS_DIR / "django.log"),
+            "maxBytes": 10 * 1024 * 1024,   # 10 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+            "encoding": "utf-8",
+        },
+        "latency_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(LOGS_DIR / "latency.log"),
+            "maxBytes": 5 * 1024 * 1024,    # 5 MB
+            "backupCount": 3,
+            "formatter": "latency",
+            "encoding": "utf-8",
+        },
+    },
+    "loggers": {
+        # Root app logger — everything goes to console + django.log
+        "": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # Dedicated latency logger — also mirrors to latency.log
+        "latency": {
+            "handlers": ["console", "file", "latency_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
+
