@@ -1,9 +1,12 @@
+import logging
 import os
 import re
 import time
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 from django.conf import settings
+
+latency_log = logging.getLogger("latency")
 
 
 def _resolve_model(model_key: str | None) -> tuple[str, dict]:
@@ -46,6 +49,16 @@ def generate_response(messages: list, model_key: str = None) -> dict:
     latency = (time.perf_counter() - t0) * 1000
 
     content = _sanitize_for_tts(resp.choices[0].message.content)
+
+    latency_log.info(
+        "[Groq] model=%s llm_ms=%.1f prompt_tok=%d completion_tok=%d total_tok=%d",
+        cfg["model_id"],
+        round(latency, 2),
+        resp.usage.prompt_tokens,
+        resp.usage.completion_tokens,
+        resp.usage.total_tokens,
+    )
+
     return {
         "content": content,
         "llm_latency_ms": round(latency, 2),

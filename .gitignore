@@ -13,6 +13,21 @@ db.sqlite3
 staticfiles/
 media/
 
+# ChromaDB vector store (generated — rebuild with: python scripts/index_kb.py)
+knowledge_base/chroma_db/
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code internal files — never commit these
+.claude/
+
+# ChromaDB — generated artifact, rebuild with: python scripts/index_kb.py
+knowledge_base/chroma_db/
+
+# Sentence-transformers model cache
+.cache/
+
+# Log files — generated at runtime, not source
+logs/*.log
