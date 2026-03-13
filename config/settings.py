@@ -68,6 +68,31 @@ TIME_ZONE = "UTC"
 USE_TZ = True
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# ── Redis ──────────────────────────────────────────────────────────────────
+# Single env-var controls all Redis connections; override per-service if needed.
+_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
+# ── Celery ─────────────────────────────────────────────────────────────────
+CELERY_BROKER_URL        = f"{_REDIS_URL}/0"
+CELERY_RESULT_BACKEND    = f"{_REDIS_URL}/0"
+CELERY_TASK_SERIALIZER   = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT    = ["json"]
+CELERY_TIMEZONE          = "UTC"
+
+# ── Session cache ──────────────────────────────────────────────────────────
+# Raw Redis URL used by calls/session_cache.py (db=1, separate from Celery).
+REDIS_SESSION_URL = os.getenv("REDIS_SESSION_URL", f"{_REDIS_URL}/1")
+REDIS_SESSION_TTL = 7200  # 2 hours — covers longest possible call
+
+# ── Django cache framework (db=1, same slot as session cache) ──────────────
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_SESSION_URL,
+    }
+}
+
 # ── Logging ────────────────────────────────────────────────────────────────
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
