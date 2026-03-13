@@ -30,7 +30,9 @@ from django.conf import settings
 
 
 # ---------------------------------------------------------------------------
-# Module-level singleton — set ONCE by init_kb(), never recreated per request.
+# Module-level singletons – initialised lazily on first use, then cached.
+# Python guarantees a module is imported once per process, so these are
+# effectively process-scoped singletons.
 # ---------------------------------------------------------------------------
 _encoder = None
 _chroma_client = None
@@ -70,10 +72,12 @@ class KnowledgeBase:
 
 def _chunk_text(text: str, size: int = 500, overlap: int = 50) -> List[str]:
     """Split *text* into overlapping character-level chunks."""
-    chunks, i = [], 0
-    while i < len(text):
-        chunks.append(text[i : i + size])
-        i += size - overlap
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + size
+        chunks.append(text[start:end])
+        start += size - overlap
     return chunks
         count = self._collection.count()
         if count == 0:
@@ -200,38 +204,44 @@ def _chunk_text(text: str, size: int = 500, overlap: int = 50) -> List[str]:
 # Singleton lifecycle — called from AppConfig.ready(), NOT per request
 # ---------------------------------------------------------------------------
 
-def init_kb() -> None:
+def build_index(force: bool = False) -> Tuple[int, int]:
     """
     Initialise the module-level singleton KnowledgeBase.
 
-    Called once from KnowledgeBaseConfig.ready() when Django starts.
-    Safe to call multiple times (no-op if already initialised).
+    Parameters
+    ----------
+    force : bool
+        Delete and rebuild the entire collection from scratch.
+
+    Returns
+    -------
+    (total_chunks, total_files) tuple.
     """
     global _KB
     if _KB is not None:
         return  # already initialised (e.g. dev auto-reload)
 
-    try:
-        _KB = KnowledgeBase()
-    except RuntimeError as exc:
-        # Print the clear "run index_kb.py" message but do NOT crash the server.
-        # retrieve() will raise a helpful RuntimeError if called before indexing.
-        print(str(exc))
-        _KB = None
+    # Skip if data already present and not forcing a rebuild.
+    if not force and collection.count() > 0:
+        print(f"[KB] ChromaDB already has {collection.count()} chunks. Skipping rebuild.")
+        return collection.count(), 0
 
 
 def get_kb() -> "KnowledgeBase":
     """
     Return the initialised singleton.
 
-    Raises RuntimeError with clear instructions if init_kb() has not been
-    called or the index has not been built yet.
-    """
-    if _KB is None:
-        raise RuntimeError(
-            "[KB] Knowledge base is not initialised.\n"
-            "Run:  python scripts/index_kb.py\n"
-            "Then restart the Django server."
+    if not files:
+        print(f"[KB] No docs found in {kb_dir}. Add .txt or .md files.")
+        return 0, 0
+
+    # When forcing, drop the old collection so stale chunks are removed.
+    if force and collection.count() > 0:
+        global _collection, _chroma_client
+        _chroma_client.delete_collection("knowledge_base")
+        _collection = _chroma_client.create_collection(
+            name="knowledge_base",
+            metadata={"hnsw:space": "cosine"},
         )
     return _KB
 
@@ -254,10 +264,19 @@ def get_kb() -> "KnowledgeBase":
 # Keeps calls/views.py imports identical: retrieve(), build_system_prompt()
 # ---------------------------------------------------------------------------
 
-def retrieve(query: str, top_k: int = 3) -> List[Tuple[str, str, float]]:
-    """Query ChromaDB and return top-k relevant chunks. No indexing ever happens here."""
-    return get_kb().retrieve(query, top_k)
+        file_chunk_count = 0
+        for idx, (chunk, emb) in enumerate(zip(raw_chunks, embs)):
+            ids.append(f"{source}_{idx}")
+            documents.append(chunk)
+            embeddings.append(emb.tolist())
+            metadatas.append({"source": source, "chunk_index": idx})
+            file_chunk_count += 1
 
+        print(f"[KB] Created {file_chunk_count} chunks from {fname}")
+
+    if not ids:
+        print("[KB] No non-empty chunks produced from docs.")
+        return 0, 0
 
 def build_system_prompt(chunks: List[Tuple[str, str, float]]) -> str:
     """Build the grounded LLM system prompt from ChromaDB-retrieved chunks."""
@@ -268,10 +287,8 @@ def build_system_prompt(chunks: List[Tuple[str, str, float]]) -> str:
 # Index builder — called ONLY by scripts/index_kb.py, NEVER per request
 # ---------------------------------------------------------------------------
 
-    print(f"[KB] Indexed {len(ids)} total chunks into ChromaDB at {settings.CHROMA_DB_DIR}")
-CHUNK_SIZE    = 500   # words per chunk
-CHUNK_OVERLAP = 50    # word overlap between consecutive chunks
-UPSERT_BATCH  = 100   # ChromaDB upsert batch size
+    print(f"[KB] Total chunks indexed: {len(ids)}")
+    return len(ids), len(files)
 
 
 def _chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
@@ -288,65 +305,53 @@ def build_index(force: bool = False) -> dict:
     """
     Read docs → chunk → embed → upsert into ChromaDB.
 
-    Raises RuntimeError if ChromaDB is empty — run scripts/index_kb.py first.
-    Parameters
-    ----------
-    force : bool
-        Delete and fully rebuild the collection (use after editing docs).
+    RAISES RuntimeError if ChromaDB is empty — run scripts/index_kb.py first.
 
     Returns
     -------
-    dict with keys: files (int), chunks (int), skipped (bool)
-
-    Called exclusively by ``scripts/index_kb.py``.  Never called at
-    request-time — that is the core fix for the per-request re-indexing bug.
+    List of (text, source, similarity_score) tuples, sorted by descending
+    similarity.
     """
     global _kb_initialized
     collection = _get_collection()
 
-    count = collection.count()
-    if count == 0:
+    if collection.count() == 0:
         raise RuntimeError(
-            "[KB] ChromaDB is empty or missing. "
-            "Run: python scripts/index_kb.py"
+            "[KB] FATAL: ChromaDB is empty or missing. "
+            "Run this command first: python scripts/index_kb.py"
         )
-
-    if not _kb_initialized:
-        print(f"[KB] ChromaDB loaded. {count} chunks ready. Skipping rebuild.")
-        _kb_initialized = True
-    import chromadb
-    from sentence_transformers import SentenceTransformer
 
     chroma_dir = settings.CHROMA_DB_DIR
     os.makedirs(chroma_dir, exist_ok=True)
 
     client = chromadb.PersistentClient(path=chroma_dir)
 
-    # Drop and recreate if force-rebuilding
-    if force:
-        try:
-            client.delete_collection(KnowledgeBase.COLLECTION_NAME)
-            print("[index] Existing collection deleted — rebuilding from scratch.")
-        except Exception:
-            pass  # collection didn't exist yet — that's fine
+    docs = results["documents"][0]
+    metas = results["metadatas"][0]
+    dists = results["distances"][0]
+
+    # ChromaDB cosine distance = 1 - cosine_similarity for normalised vectors.
+    # all-MiniLM-L6-v2 outputs are L2-normalised, so distance ∈ [0, 1].
+    # Convert to similarity score so higher == better.
+    chunks = [
+        (doc, meta["source"], max(0.0, 1.0 - dist))
+        for doc, meta, dist in zip(docs, metas, dists)
+    ]
+    return chunks
 
     collection = client.get_or_create_collection(
         name=KnowledgeBase.COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},
     )
 
-    if not force and collection.count() > 0:
-        print(
-            f"[index] ChromaDB already has {collection.count()} chunks. "
-            "Pass --force to rebuild."
-        )
-        return {"files": 0, "chunks": collection.count(), "skipped": True}
-
-    # Discover source documents
-    kb_dir = settings.KNOWLEDGE_BASE_DIR
-    files  = (
-        glob.glob(os.path.join(kb_dir, "**/*.txt"), recursive=True)
-        + glob.glob(os.path.join(kb_dir, "**/*.md"),  recursive=True)
+def build_system_prompt(chunks: List[Tuple[str, str, float]]) -> str:
+    """
+    Build the system prompt that is prepended to every Groq LLM request.
+    """
+    p = (
+        "You are a helpful AI voice assistant on an outbound call. "
+        "Be concise and friendly. Keep answers under 2 sentences unless asked for detail. "
+        "Use ONLY the knowledge below. If unsure, say so — never fabricate.\n\n"
     )
 
     if not files:

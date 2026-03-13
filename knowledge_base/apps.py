@@ -1,36 +1,27 @@
-"""
-knowledge_base/apps.py
------------------------
-Django AppConfig for the knowledge_base app.
-
-AppConfig.ready() is called ONCE when the Django server starts (after all
-models and apps are loaded).  We use it to initialise the ChromaDB singleton
-so that:
-
-  - The encoder and collection are loaded into memory once per process.
-  - Every subsequent request just queries the pre-warmed index.
-  - No indexing, no file I/O, no embedding generation happens at request time.
-"""
-
 from django.apps import AppConfig
 
 
 class KnowledgeBaseConfig(AppConfig):
     name = "knowledge_base"
-    verbose_name = "Knowledge Base"
 
-    def ready(self) -> None:
+    def ready(self):
         """
-        Initialise the KB singleton when Django finishes starting.
+        Pre-warm the ChromaDB collection once at Django startup.
 
-        This is the ONLY place init_kb() should be called.
-        It will:
-          1. Connect to the persistent ChromaDB collection.
-          2. Load the sentence-transformer encoder into memory.
-          3. Print a clear error (without crashing) if the index hasn't been
-             built yet and remind the developer to run index_kb.py.
+        This runs once per process (Django calls ready() once).
+        It establishes the persistent client connection and logs the chunk
+        count so operators can confirm the index is healthy at boot time.
         """
-        # Guard against double-initialisation in Django's dev auto-reloader
-        # (the reloader imports apps twice; ready() is called once per process).
-        from knowledge_base.kb_service import init_kb
-        init_kb()
+        try:
+            from knowledge_base.kb_service import _get_collection
+            collection = _get_collection()
+            count = collection.count()
+            if count > 0:
+                print(f"[KB] ChromaDB loaded. {count} chunks ready. Skipping rebuild.")
+            else:
+                print(
+                    "[KB] WARNING: ChromaDB is empty. "
+                    "Run: python scripts/index_kb.py"
+                )
+        except Exception as exc:
+            print(f"[KB] WARNING: Could not connect to ChromaDB on startup: {exc}")

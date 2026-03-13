@@ -1,28 +1,29 @@
 """
 scripts/index_kb.py
---------------------
-Standalone script to build (or rebuild) the ChromaDB vector index from the
+-------------------
+Standalone offline script to (re)build the ChromaDB vector index from the
 documents in knowledge_base/docs/.
 
-Run this ONCE before starting the Django server for the first time, and again
-whenever you add, update, or delete documents.
+Run this BEFORE starting the Django server, and again whenever you add,
+update, or remove documents.
 
 Usage
 -----
 # First-time build (or safe no-op if already built)
     python scripts/index_kb.py
 
-# Force a full rebuild after editing / deleting docs
-    python scripts/index_kb.py --force
+# Force a full rebuild (use after updating or deleting docs)
+python scripts/index_kb.py --force
 
-# Verify the index without rebuilding
-    python scripts/index_kb.py --verify
+# Verify current index without rebuilding
+python scripts/index_kb.py --verify
 """
 
 import sys
 import os
 import glob
 import argparse
+import shutil
 import time
 
 # ---------------------------------------------------------------------------
@@ -99,7 +100,12 @@ def main() -> None:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Delete the existing collection and rebuild from scratch.",
+        help="Delete the existing ChromaDB directory and rebuild from scratch.",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Print index stats and exit without rebuilding.",
     )
     parser.add_argument(
         "--verify",
@@ -121,39 +127,40 @@ def main() -> None:
         _verify_index()
         return
 
+    # --verify: just show stats
+    if args.verify:
+        collection = _get_collection()
+        count = collection.count()
+        print(f"[index_kb] Current chunk count: {count}")
+        return
+
+    # --force: delete chroma_db dir entirely so PersistentClient starts fresh
     if args.force:
-        print("  Mode: FORCE REBUILD — existing index will be deleted.\n")
+        chroma_dir = settings.CHROMA_DB_DIR
+        if os.path.exists(chroma_dir):
+            print(f"[index_kb] --force: deleting {chroma_dir}")
+            shutil.rmtree(chroma_dir)
+            # Reset the module-level singletons so _get_collection() recreates them
+            import knowledge_base.kb_service as _kb_svc
+            _kb_svc._chroma_client = None
+            _kb_svc._collection = None
+            print("[index_kb] ChromaDB directory removed. Rebuilding...")
+        else:
+            print("[index_kb] --force: no existing ChromaDB found, building fresh.")
     else:
         print("  Mode: INCREMENTAL — skips rebuild if index already exists.\n")
 
     t0 = time.perf_counter()
-    summary = build_index(force=args.force)
+    total_chunks, total_files = build_index(force=False)
     elapsed = time.perf_counter() - t0
 
+    # Confirm persistence by re-reading from disk
     collection = _get_collection()
-    kb_dir = settings.KNOWLEDGE_BASE_DIR
-    files = (
-        glob.glob(os.path.join(kb_dir, "**/*.txt"), recursive=True)
-        + glob.glob(os.path.join(kb_dir, "**/*.md"), recursive=True)
-    )
-    print(
-        f"Index built successfully. {collection.count()} chunks from {len(files)} files. "
-        f"(took {elapsed:.2f}s)"
-    )
+    confirmed = collection.count()
+
     print()
-    print("=" * 60)
-    if summary["skipped"]:
-        print(f"  ✓ Skipped — index already has {summary['chunks']} chunks.")
-        print("    Pass --force to rebuild.")
-    else:
-        print(f"  ✓ Index built successfully.")
-        print(f"    Files   : {summary['files']}")
-        print(f"    Chunks  : {summary['chunks']}")
-        print(f"    Time    : {elapsed:.2f}s")
-        print()
-        print("  Next step: start (or restart) the Django server.")
-        print("    python manage.py runserver")
-    print("=" * 60)
+    print(f"Index built successfully. {confirmed} chunks from {total_files} files.")
+    print(f"[index_kb] Done in {elapsed:.2f}s. Confirmed {confirmed} chunks in ChromaDB.")
 
 
 if __name__ == "__main__":
