@@ -18,6 +18,7 @@ from evaluation.eval_service import score_response
 from knowledge_base.kb_service import build_system_prompt, retrieve
 
 logger = logging.getLogger(__name__)
+latency_log = logging.getLogger("latency")
 
 
 def _get_session(sid):
@@ -118,6 +119,18 @@ def respond_to_speech(request):
         session.model_id = ai_result.get("model")
         session.model_provider = ai_result.get("provider")
         session.save()
+
+        latency_log.info(
+            "session=%s turn=%d model=%s llm_ms=%.1f total_ms=%.1f tokens=%d/%d/%d",
+            session_id,
+            turn.turn_index,
+            ai_result.get("model", "-"),
+            turn.llm_latency_ms,
+            turn.total_latency_ms,
+            ai_result.get("prompt_tokens", 0),
+            ai_result.get("completion_tokens", 0),
+            ai_result.get("total_tokens", 0),
+        )
 
         threading.Thread(
             target=_score_and_persist_turn,
