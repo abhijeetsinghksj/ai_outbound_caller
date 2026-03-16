@@ -8,6 +8,6 @@ class KnowledgeBaseConfig(AppConfig):
         """
         Initialise the ChromaDB-backed knowledge base once at Django startup.
         """
-        from knowledge_base.kb_service import init_kb
+        from .kb_service import init_kb
 
         init_kb()
