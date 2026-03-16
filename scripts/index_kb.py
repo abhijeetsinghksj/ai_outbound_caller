@@ -1,8 +1,6 @@
 """
-scripts/index_kb.py
--------------------
-Standalone offline script to (re)build the ChromaDB vector index from the
-documents in knowledge_base/docs/.
+Standalone offline script to (re)build the ChromaDB vector index from
+knowledge_base/docs/.
 """
 
 import argparse
@@ -14,9 +12,6 @@ import time
 from pathlib import Path
 from typing import List
 
-# ---------------------------------------------------------------------------
-# Bootstrap: put the project root on sys.path so Django imports work.
-# ---------------------------------------------------------------------------
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
@@ -26,11 +21,25 @@ import django
 django.setup()
 
 from django.conf import settings
-from knowledge_base.kb_service import CHUNK_OVERLAP, CHUNK_SIZE, _chunk_text
+
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
+
+
+def _chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    """Split text into overlapping character chunks."""
+    chunks: List[str] = []
+    start = 0
+    step = max(1, size - overlap)
+    while start < len(text):
+        chunk = text[start : start + size].strip()
+        if chunk:
+            chunks.append(chunk)
+        start += step
+    return chunks
 
 
 def _verify_index() -> None:
-    """Print a summary of what is currently stored in ChromaDB."""
     import chromadb
 
     chroma_dir = settings.CHROMA_DB_DIR
@@ -55,25 +64,26 @@ def _verify_index() -> None:
 
 
 def _load_documents() -> List[Path]:
-    docs = sorted(glob.glob(os.path.join(settings.KNOWLEDGE_BASE_DIR, "*.md")))
-    return [Path(p) for p in docs]
+    patterns = ["*.md", "*.txt"]
+    docs: List[str] = []
+    for pattern in patterns:
+        docs.extend(glob.glob(os.path.join(settings.KNOWLEDGE_BASE_DIR, pattern)))
+    return [Path(p) for p in sorted(docs)]
 
 
 def build_index() -> tuple[int, int]:
-    """Build ChromaDB collection from markdown docs."""
     import chromadb
     from sentence_transformers import SentenceTransformer
 
     docs = _load_documents()
     if not docs:
-        raise RuntimeError(f"No markdown documents found in {settings.KNOWLEDGE_BASE_DIR}")
+        raise RuntimeError(f"No documents found in {settings.KNOWLEDGE_BASE_DIR}")
 
     client = chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
     collection = client.get_or_create_collection(
         name="knowledge_base", metadata={"hnsw:space": "cosine"}
     )
 
-    # Rebuild from current docs.
     existing = collection.get(include=[])
     if existing.get("ids"):
         collection.delete(ids=existing["ids"])
@@ -85,12 +95,15 @@ def build_index() -> tuple[int, int]:
     all_metas: List[dict] = []
 
     for doc_path in docs:
-        text = doc_path.read_text(encoding="utf-8")
-        chunks = _chunk_text(text, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP)
+        text = doc_path.read_text(encoding="utf-8", errors="ignore")
+        chunks = _chunk_text(text)
         for idx, chunk in enumerate(chunks):
             all_ids.append(f"{doc_path.name}:{idx}")
             all_docs.append(chunk)
             all_metas.append({"source": doc_path.name})
+
+    if not all_docs:
+        raise RuntimeError("No non-empty chunks produced from source documents")
 
     embeddings = encoder.encode(
         all_docs, show_progress_bar=False, normalize_embeddings=True
@@ -108,16 +121,8 @@ def build_index() -> tuple[int, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build ChromaDB knowledge-base index.")
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Delete the existing ChromaDB directory and rebuild from scratch.",
-    )
-    parser.add_argument(
-        "--verify",
-        action="store_true",
-        help="Print index stats and exit without rebuilding.",
-    )
+    parser.add_argument("--force", action="store_true", help="Delete existing ChromaDB and rebuild.")
+    parser.add_argument("--verify", action="store_true", help="Print index stats and exit.")
     args = parser.parse_args()
 
     print("=" * 60)

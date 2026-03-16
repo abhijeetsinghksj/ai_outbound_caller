@@ -8,7 +8,7 @@ from django.conf import settings
 from colorama import Fore, Style, init as colorama_init
 from calls.models import CallSession
 from calls.twilio_service import initiate_call
-from knowledge_base.kb_service import build_index
+from knowledge_base.kb_service import init_kb
 colorama_init(autoreset=True)
 
 MODEL_OPTIONS = list(settings.MODEL_CONFIGS.keys())
@@ -92,7 +92,7 @@ def main():
     print(f"{'='*52}{Style.RESET_ALL}\n")
 
     print(f"{Fore.YELLOW}Loading knowledge base...{Style.RESET_ALL}")
-    build_index()
+    init_kb()
 
     raw = args.number or input(f"{Fore.CYAN}Phone number (e.g. +919876543210): {Style.RESET_ALL}").strip()
     try:
