@@ -130,6 +130,8 @@ def main():
     print("  AI Outbound Caller — Django + MongoDB + Twilio")
     print(f"{'='*52}{Style.RESET_ALL}\n")
 
+    print(f"{Fore.YELLOW}Knowledge base ready.{Style.RESET_ALL}")
+
     raw = args.number or input(
         f"{Fore.CYAN}Phone number (e.g. +919876543210): {Style.RESET_ALL}"
     ).strip()
